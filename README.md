@@ -12,16 +12,23 @@ You get a running **FROST-Server** that stores sensor data with real geometries 
 1. [Architecture](#1-architecture)
 2. [Requirements](#2-requirements)
 3. [Repository layout](#3-repository-layout)
-4. [Quick start](#4-quick-start)
-5. [⚠ Check your ports first](#5--check-your-ports-first)
-6. [The docker-compose.yml explained](#6-the-docker-composeyml-explained)
-7. [The SensorThings data model](#7-the-sensorthings-data-model)
-8. [Create your first data](#8-create-your-first-data)
-9. [Query the data](#9-query-the-data)
-10. [Optional: Mosquitto + Node-RED](#10-optional-mosquitto--node-red)
-11. [View the data in QGIS](#11-view-the-data-in-qgis)
-12. [Troubleshooting](#12-troubleshooting)
-13. [References](#13-references)
+4. [⚠ Check your ports first](#4--check-your-ports-first)
+5. [Set up the environment step by step](#5-set-up-the-environment-step-by-step)
+   - [5.1 Install Docker](#51-install-docker)
+   - [5.2 Run PostgreSQL + PostGIS](#52-run-postgresql--postgis)
+   - [5.3 Run FROST-Server](#53-run-frost-server)
+   - [5.4 Stop, restart and clean up](#54-stop-restart-and-clean-up)
+6. [Quick start with Docker Compose](#6-quick-start-with-docker-compose)
+7. [The docker-compose.yml explained](#7-the-docker-composeyml-explained)
+8. [The SensorThings data model](#8-the-sensorthings-data-model)
+9. [Create your first data](#9-create-your-first-data)
+10. [Query the data](#10-query-the-data)
+11. [Optional: Mosquitto + Node-RED](#11-optional-mosquitto--node-red)
+12. [View the data in QGIS](#12-view-the-data-in-qgis)
+13. [Troubleshooting](#13-troubleshooting)
+14. [References](#14-references)
+
+> **Two ways to install.** Section 5 builds the stack by hand, one component at a time, so you see what each part does. Section 6 starts the same stack with a single command. Use **one or the other**, not both at the same time: they use the same container names and ports.
 
 ---
 
@@ -42,7 +49,7 @@ You get a running **FROST-Server** that stores sensor data with real geometries 
 |---|---|---|---|
 | **FROST-Server** | Implements the SensorThings API (REST + built-in MQTT) | ✅ | 8080 (HTTP), 1883 (MQTT) |
 | **PostgreSQL + PostGIS** | Stores all entities; locations as geometries | ✅ | 5432 |
-| **Mosquitto** | Stand-alone MQTT broker for field devices | optional | 1884 on the host (see §5) |
+| **Mosquitto** | Stand-alone MQTT broker for field devices | optional | 1884 on the host (see §4) |
 | **Node-RED** | Converts device messages into SensorThings Observations | optional | 1880 |
 
 The minimal setup is FROST + PostGIS. Clients can write to FROST directly over HTTP, so Mosquitto and Node-RED are only needed when real devices send data in their own format.
@@ -70,7 +77,7 @@ docker compose version
 ## 3. Repository layout
 
 ```
-.
+parking_pykci/
 ├── docker-compose.yml        # all services
 ├── .env.example              # ports and passwords → copy to .env
 ├── mosquitto/
@@ -83,14 +90,215 @@ docker compose version
 
 ---
 
-## 4. Quick start
+## 4. ⚠ Check your ports first
+
+Docker publishes each container port on your computer. If a port is already in use, the container won't start, or you end up talking to a different program. **Choose your ports before you start any container.**
+
+| Service | Default | Typical clash | Change to |
+|---|---|---|---|
+| PostgreSQL | 5432 | PostgreSQL already installed on your laptop | 5433 |
+| FROST HTTP | 8080 | GeoServer, Tomcat, another web app | 8081 |
+| FROST MQTT | 1883 | Mosquitto | keep 1883 (Mosquitto uses 1884, see §11) |
+| Node-RED | 1880 | another Node-RED | 1881 |
+
+Find out what is using a port:
+
+```bash
+# Windows
+netstat -ano | findstr :5432
+# macOS / Linux
+lsof -i :5432
+```
+
+**Manual setup (§5):** change the left number of each `-p` option, e.g. `-p 5433:5432`.
+
+**Docker Compose (§6):** set the ports in `.env`:
+
+```dotenv
+DB_HOST_PORT=5433
+FROST_HTTP_PORT=8081
+FROST_MQTT_PORT=1883
+MOSQUITTO_HOST_PORT=1884
+NODERED_HOST_PORT=1880
+POSTGRES_PASSWORD=ChangeMe
+```
+
+**Three rules:**
+
+1. A mapping is `HOST:CONTAINER`. **Change only the left number.**
+2. If you change the FROST HTTP port, `serviceRootUrl` must use the same port. The compose file (§7) builds it from `FROST_HTTP_PORT` automatically. Without that, the links in API responses point to the wrong port.
+3. **Do not change** `database:5432` in `persistence_db_url`. FROST reaches the database by its service name **inside Docker's network**, whatever port you published on the host.
+
+---
+
+## 5. Set up the environment step by step
+
+You install three components, in this order:
+
+| Step | Component | Why this order |
+|---|---|---|
+| 5.1 | **Docker** | Runs the other two as containers |
+| 5.2 | **PostgreSQL + PostGIS** | FROST needs a database to store its data |
+| 5.3 | **FROST-Server** | Connects to the database and serves the API |
+
+Each step ends with a check. Don't move on until the check passes.
+
+### 5.1 Install Docker
+
+**Windows 10 / 11**
+
+1. Docker Desktop needs **WSL 2**. Open PowerShell **as administrator** and run:
+   ```powershell
+   wsl --install
+   ```
+   Restart the computer when asked.
+2. Download **Docker Desktop for Windows** from https://www.docker.com/products/docker-desktop/ and run the installer. Keep the option **Use WSL 2 instead of Hyper-V** ticked.
+3. Start Docker Desktop and wait until it shows **Engine running**.
+
+**macOS**
+
+1. Download **Docker Desktop for Mac** from https://www.docker.com/products/docker-desktop/. Choose **Apple silicon** (M1–M4) or **Intel** to match your Mac (Apple menu → About This Mac).
+2. Drag Docker into Applications, start it and wait until it shows **Engine running**.
+
+**Linux (Ubuntu / Debian)**
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh   # installs Docker Engine + Compose plugin
+sudo usermod -aG docker $USER                 # use docker without sudo
+```
+
+Log out and back in so the group change takes effect.
+
+**✅ Check**
+
+```bash
+docker --version
+docker compose version
+docker run --rm hello-world
+```
+
+`hello-world` prints *Hello from Docker!* If you get *Cannot connect to the Docker daemon*, Docker Desktop is not running yet.
+
+### 5.2 Run PostgreSQL + PostGIS
+
+We use the official **postgis/postgis** image: PostgreSQL with the PostGIS extension already installed and enabled in the database it creates.
+
+**1. Create a network and a volume**
+
+```bash
+docker network create sensorthings-net   # lets FROST find the database by name
+docker volume create postgis_volume      # keeps the data when the container is removed
+```
+
+**2. Start the database container**
+
+```bash
+docker run -d --name database \
+  --network sensorthings-net \
+  -e POSTGRES_DB=sensorthings \
+  -e POSTGRES_USER=sensorthings \
+  -e POSTGRES_PASSWORD=ChangeMe \
+  -p 5432:5432 \
+  -v postgis_volume:/var/lib/postgresql/data \
+  postgis/postgis:16-3.4-alpine
+```
+
+| Option | Meaning |
+|---|---|
+| `--name database` | Container name. FROST uses it as the host name. |
+| `--network sensorthings-net` | Puts the database on the same network as FROST |
+| `-e POSTGRES_DB / USER / PASSWORD` | Database, user and password created at the first start |
+| `-p 5432:5432` | Publishes the port on your computer (for pgAdmin or QGIS). **Port busy? Use `-p 5433:5432`** (§4). |
+| `-v postgis_volume:…` | Stores the data in the volume |
+
+> **Windows PowerShell:** replace the `\` at the end of each line with a backtick `` ` ``, or write the whole command on one line.
+
+**✅ Check**
+
+```bash
+docker ps                                   # "database" is listed as Up
+docker logs database                        # ends with "database system is ready to accept connections"
+docker exec -it database psql -U sensorthings -d sensorthings -c "SELECT postgis_full_version();"
+```
+
+The last command prints the PostGIS version. If it says *function postgis_full_version() does not exist*, enable the extension once:
+
+```bash
+docker exec -it database psql -U sensorthings -d sensorthings -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+```
+
+> **Already have PostgreSQL installed on your computer?** You can use it instead of the container: install PostGIS with the Stack Builder (Windows) or your package manager, create the `sensorthings` user and database, and run `CREATE EXTENSION postgis;` in it. In step 5.3, FROST then reaches it at `host.docker.internal` instead of `database`. For the course, the container is simpler.
+
+### 5.3 Run FROST-Server
+
+We use the **all-in-one** image `fraunhoferiosb/frost-server`: HTTP API and MQTT in one container.
+
+**1. Start the FROST container**
+
+```bash
+docker run -d --name web \
+  --network sensorthings-net \
+  -p 8080:8080 \
+  -p 1883:1883 \
+  -e serviceRootUrl=http://localhost:8080/FROST-Server \
+  -e http_cors_enable=true \
+  -e http_cors_allowed_origins=* \
+  -e persistence_db_driver=org.postgresql.Driver \
+  -e persistence_db_url=jdbc:postgresql://database:5432/sensorthings \
+  -e persistence_db_username=sensorthings \
+  -e persistence_db_password=ChangeMe \
+  -e persistence_autoUpdateDatabase=true \
+  fraunhoferiosb/frost-server:latest
+```
+
+| Option | Meaning |
+|---|---|
+| `-p 8080:8080` | HTTP API. **Port busy? Use `-p 8081:8080`** and change `serviceRootUrl` to `:8081` too. |
+| `-p 1883:1883` | FROST's built-in MQTT |
+| `serviceRootUrl` | The public address FROST writes into its links |
+| `persistence_db_url` | `database` = the container name from 5.2. Always port **5432**, whatever you published on your computer. |
+| `persistence_db_password` | Must match `POSTGRES_PASSWORD` from 5.2 |
+| `persistence_autoUpdateDatabase=true` | Creates the SensorThings tables at start-up |
+
+**2. Initialise the database (if needed)**
+
+Open http://localhost:8080/FROST-Server/DatabaseStatus. With `persistence_autoUpdateDatabase=true` the tables already exist. If the page shows pending changes, click the update button.
+
+**✅ Check**
+
+```bash
+docker ps                 # "database" and "web" are both Up
+docker logs -f web        # no "Connection refused" errors (Ctrl+C to leave)
+```
+
+Open http://localhost:8080/FROST-Server/v1.1. You should see JSON listing `Things`, `Locations`, `Datastreams`, `Sensors`, `ObservedProperties`, `Observations`, `FeaturesOfInterest` and `HistoricalLocations`.
+
+**Your server is running.** Continue with §9 to create your first data.
+
+### 5.4 Stop, restart and clean up
+
+```bash
+docker stop web database          # stop (data is kept)
+docker start database web         # start again: database first
+docker rm -f web database         # remove the containers (data stays in the volume)
+docker volume rm postgis_volume   # delete the data for good
+docker network rm sensorthings-net
+```
+
+To switch to Docker Compose (§6), remove the containers first: `docker rm -f web database`.
+
+---
+
+## 6. Quick start with Docker Compose
+
+This starts the same PostGIS and FROST containers as §5, configured in one file. If you followed §5, stop and remove those containers first (§5.4).
 
 ```bash
 # 1. Get the project
-git clone [GitHub repo URL]
-cd [repo-folder]
+git clone https://github.com/badreddineouzougarh/parking_pykci.git
+cd parking_pykci
 
-# 2. Create your local settings, then CHECK THE PORTS (§5)
+# 2. Create your local settings, then CHECK THE PORTS (§4)
 cp .env.example .env
 
 # 3. Start the core stack (FROST + PostGIS)
@@ -121,46 +329,7 @@ docker compose down -v     # stops containers and DELETES the database volume
 
 ---
 
-## 5. ⚠ Check your ports first
-
-Docker publishes each container port on your computer. If a port is already in use, the container won't start, or you end up talking to a different program. **Edit the ports before the first `docker compose up`.**
-
-| Service | Default | Typical clash | Change to |
-|---|---|---|---|
-| PostgreSQL | 5432 | PostgreSQL already installed on your laptop | 5433 |
-| FROST HTTP | 8080 | GeoServer, Tomcat, another web app | 8081 |
-| FROST MQTT | 1883 | Mosquitto | keep 1883 (Mosquitto uses 1884, see §10) |
-| Node-RED | 1880 | another Node-RED | 1881 |
-
-Find out what is using a port:
-
-```bash
-# Windows
-netstat -ano | findstr :5432
-# macOS / Linux
-lsof -i :5432
-```
-
-Set the ports in `.env`:
-
-```dotenv
-DB_HOST_PORT=5433
-FROST_HTTP_PORT=8081
-FROST_MQTT_PORT=1883
-MOSQUITTO_HOST_PORT=1884
-NODERED_HOST_PORT=1880
-POSTGRES_PASSWORD=ChangeMe
-```
-
-**Three rules:**
-
-1. A mapping is `HOST:CONTAINER`. **Change only the left number.**
-2. If you change the FROST HTTP port, `serviceRootUrl` must use the same port. The compose file below builds it from `FROST_HTTP_PORT` automatically. Without that, the links in API responses point to the wrong port.
-3. **Do not change** `database:5432` in `persistence_db_url`. FROST reaches the database by its service name **inside Docker's network**, whatever port you published on the host.
-
----
-
-## 6. The docker-compose.yml explained
+## 7. The docker-compose.yml explained
 
 ```yaml
 services:
@@ -230,14 +399,14 @@ What the important lines do:
 | `http_cors_enable` | Lets browser apps (Leaflet, OpenLayers) on other origins call the API. |
 | `persistence_db_url` | JDBC connection; `database` is the service name inside the Docker network. |
 | `persistence_autoUpdateDatabase` | Creates/updates the tables automatically at start-up. |
-| `profiles: ["iot"]` | Mosquitto and Node-RED start only when you ask for them (§10). |
+| `profiles: ["iot"]` | Mosquitto and Node-RED start only when you ask for them (§11). |
 | `postgis_volume` | Named volume, so the data survives `docker compose down`. |
 
 > **Security:** this setup is for local teaching. It has no authentication and uses a default password. Do not expose it to the internet as it is.
 
 ---
 
-## 7. The SensorThings data model
+## 8. The SensorThings data model
 
 ```
  Location ◀──▶ Thing ───▶ HistoricalLocation
@@ -260,13 +429,13 @@ What the important lines do:
 | **Observation** | One result at one time | 21.4 at 10:00 |
 | **FeatureOfInterest** | What the observation is about (geometry) | The air at the station, a field parcel |
 
-**Location** and **FeatureOfInterest** hold geometry, which is what makes spatial queries possible (§9).
+**Location** and **FeatureOfInterest** hold geometry, which is what makes spatial queries possible (§10).
 
 ---
 
-## 8. Create your first data
+## 9. Create your first data
 
-### 8.1 One request for Thing + Location + Datastream (deep insert)
+### 9.1 One request for Thing + Location + Datastream (deep insert)
 
 `data/station.json`:
 
@@ -316,7 +485,7 @@ curl -X POST -H "Content-Type: application/json" \
 A `201 Created` response with a `Location` header means the Thing was created. Check it in the browser:
 http://localhost:8080/FROST-Server/v1.1/Things?$expand=Locations,Datastreams
 
-### 8.2 Post an Observation
+### 9.2 Post an Observation
 
 `data/observation.json`:
 
@@ -338,7 +507,7 @@ If you send no `FeatureOfInterest`, FROST creates one from the Thing's Location.
 
 ---
 
-## 9. Query the data
+## 10. Query the data
 
 Base URL: `http://localhost:8080/FROST-Server/v1.1/`
 
@@ -368,7 +537,7 @@ You can also **create** an Observation by publishing JSON to `v1.1/Datastreams(1
 
 ---
 
-## 10. Optional: Mosquitto + Node-RED
+## 11. Optional: Mosquitto + Node-RED
 
 Start them with the `iot` profile:
 
@@ -409,7 +578,7 @@ mosquitto_pub -h localhost -p 1884 -t devices/station01/temp -m 22.7
 
 ---
 
-## 11. View the data in QGIS
+## 12. View the data in QGIS
 
 1. QGIS 3.36 or later: **Layer → Data Source Manager → SensorThings**
 2. **New** connection, URL: `http://localhost:8080/FROST-Server/v1.1`
@@ -418,17 +587,19 @@ mosquitto_pub -h localhost -p 1884 -t devices/station01/temp -m 22.7
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| `port is already allocated` / `address already in use` | Port clash. Change the host port in `.env` (§5). |
+| `port is already allocated` / `address already in use` | Port clash. Change the host port (§4). |
 | Links in responses point to `:8080` but you use `:8081` | `serviceRootUrl` doesn't match the published port. |
 | FROST log: `Connection refused` to the database | The DB is still starting. Wait and run `docker compose restart web`, and check that `persistence_db_url` uses `database:5432`. |
 | `password authentication failed` | You changed the password after the first start. The old one is stored in the volume: `docker compose down -v` (**deletes data**) and start again. |
 | Empty list or SQL errors on `/v1.1/Things` | Tables are missing. Open `/DatabaseStatus` and run the update. |
-| Mosquitto: "only local connections" | `mosquitto.conf` is missing or not mounted (§10). |
+| Mosquitto: "only local connections" | `mosquitto.conf` is missing or not mounted (§11). |
 | `curl` errors on Windows | Use Git Bash, WSL or Postman. |
+| `Conflict. The container name "/web" is already in use` | Containers from §5 still exist. Remove them: `docker rm -f web database`. |
+| `docker: command not found` / cannot connect to the daemon | Docker Desktop is not started, or (Linux) log out and in after `usermod` (§5.1). |
 
 Useful commands:
 
@@ -442,10 +613,12 @@ docker compose pull               # update images
 
 ---
 
-## 13. References
+## 14. References
 
 - OGC SensorThings API standard: https://www.ogc.org/standards/sensorthings/
 - SensorThings API overview: https://ogcapi.ogc.org/sensorthings/
 - FROST-Server documentation: https://fraunhoferiosb.github.io/FROST-Server/
 - FROST-Server Docker deployment: https://fraunhoferiosb.github.io/FROST-Server/deployment/docker.html
 - FROST-Server on Docker Hub: https://hub.docker.com/r/fraunhoferiosb/frost-server
+- PostGIS Docker image: https://hub.docker.com/r/postgis/postgis
+- Docker Desktop: https://docs.docker.com/desktop/
