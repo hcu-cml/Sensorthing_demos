@@ -63,7 +63,7 @@ The minimal setup is FROST + PostGIS. Clients can write to FROST directly over H
 - A tool for HTTP requests: your browser (GET), plus **curl**, **Postman** or **Bruno** (POST)
 - Optional: **QGIS 3.36+**, **MQTT Explorer**
 
-Check your installation:
+Check your installation (if you have Docker already):
 
 ```bash
 docker --version
@@ -92,39 +92,6 @@ root(project_folder)/
 ```
 
 ---
-
-## 4. ⚠ Check your ports first
-
-Docker publishes each container port on your computer. If a port is already in use, the container won't start, or you end up talking to a different program. **Choose your ports before you start any container.**
-
-| Service | Default | Typical clash | Change to |
-|---|---|---|---|
-| PostgreSQL | 5432 | PostgreSQL already installed on your laptop | 5433 |
-| FROST HTTP | 8080 | GeoServer, Tomcat, another web app | 8081 |
-| FROST MQTT | 1883 | Mosquitto | keep 1883 (Mosquitto uses 1884, see §11) |
-| Node-RED | 1880 | another Node-RED | 1881 |
-
-Find out what is using a port:
-
-```bash
-# Windows
-netstat -ano | findstr :5432
-# macOS / Linux
-lsof -i :5432
-```
-
-**Manual setup (§5):** change the left number of each `-p` option, e.g. `-p 5433:5432`.
-
-**Docker Compose (§6):** set the ports in `.env`:
-
-```dotenv
-DB_HOST_PORT=5433
-FROST_HTTP_PORT=8081
-FROST_MQTT_PORT=1883
-MOSQUITTO_HOST_PORT=1884
-NODERED_HOST_PORT=1880
-POSTGRES_PASSWORD=ChangeMe
-```
 
 
 ## 5. Set up the environment step by step
