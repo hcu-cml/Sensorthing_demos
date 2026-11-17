@@ -77,10 +77,13 @@ docker compose version
 ## 3. Repository layout
 
 ```
-parking_pykci/
+root(project_folder)/
 ├── docker-compose.yml        # all services
-├── .env.example              # ports and passwords → copy to .env
-├── mosquitto/
+├── .env         # ports and passwords → copy to .env
+├── Client_viewer/
+    ├── index.html 
+    └── script.js     
+├── mosquitto/(optional)
 │   └── config/mosquitto.conf # broker configuration (optional service)
 ├── data/
 │   ├── station.json          # example Thing with Location + Datastream
@@ -123,13 +126,6 @@ NODERED_HOST_PORT=1880
 POSTGRES_PASSWORD=ChangeMe
 ```
 
-**Three rules:**
-
-1. A mapping is `HOST:CONTAINER`. **Change only the left number.**
-2. If you change the FROST HTTP port, `serviceRootUrl` must use the same port. The compose file (§7) builds it from `FROST_HTTP_PORT` automatically. Without that, the links in API responses point to the wrong port.
-3. **Do not change** `database:5432` in `persistence_db_url`. FROST reaches the database by its service name **inside Docker's network**, whatever port you published on the host.
-
----
 
 ## 5. Set up the environment step by step
 
